@@ -4,36 +4,33 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 
 export default function SellPage() {
-  // รายการสินค้าทั้งหมด
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // สินค้าที่เลือก
   const [selectedProductId, setSelectedProductId] = useState('');
   const [quantity, setQuantity] = useState('');
 
-  // ข้อความแจ้งเตือน
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // โหลดสินค้าเมื่อเปิดหน้า
   useEffect(() => {
     fetchProducts();
   }, []);
 
-  // ดึงสินค้าจาก Supabase
+  // โหลดสินค้าจาก Supabase
   async function fetchProducts() {
     setLoading(true);
     setErrorMsg('');
 
     const { data, error } = await supabase
       .from('products')
-      .select('*')
+      .select('id, sku, name, price, stock, unit')
       .order('name', { ascending: true });
 
     if (error) {
       setErrorMsg('โหลดรายการสินค้าไม่สำเร็จ: ' + error.message);
+      setProducts([]);
     } else {
       setProducts(data || []);
     }
@@ -41,82 +38,93 @@ export default function SellPage() {
     setLoading(false);
   }
 
-  // หาสินค้าที่เลือก
+  // สินค้าที่เลือก
   const selectedProduct = products.find(
-    (product) => product.id === selectedProductId
+    (product) => String(product.id) === String(selectedProductId)
   );
 
-  // แปลงจำนวนเป็นตัวเลข
-  const quantityNumber = parseInt(quantity, 10) || 0;
+  // จำนวน
+  const quantityNumber = Number.parseInt(quantity, 10) || 0;
 
-  // คำนวณยอดรวม
+  // ยอดรวม
   const totalPrice = selectedProduct
     ? Number(selectedProduct.price) * quantityNumber
     : 0;
 
-  // รีเซ็ตฟอร์ม
+  // ล้างฟอร์ม
   function resetForm() {
     setSelectedProductId('');
     setQuantity('');
   }
 
-  // กดปุ่มขาย
+  // ขายสินค้า
   async function handleSell(e) {
     e.preventDefault();
 
     setErrorMsg('');
     setSuccessMsg('');
 
-    // ตรวจสอบการเลือกสินค้า
     if (!selectedProduct) {
       setErrorMsg('กรุณาเลือกสินค้า');
       return;
     }
 
-    // ตรวจสอบจำนวน
-    if (!quantityNumber || quantityNumber <= 0) {
+    if (quantityNumber <= 0) {
       setErrorMsg('กรุณากรอกจำนวนที่ต้องการขายให้ถูกต้อง');
       return;
     }
 
-    // ตรวจสอบ Stock
-    if (quantityNumber > selectedProduct.stock) {
+    if (quantityNumber > Number(selectedProduct.stock)) {
       setErrorMsg(
-        `สินค้าคงเหลือไม่พอ (คงเหลือ ${selectedProduct.stock} ${selectedProduct.unit || ''})`
+        `สินค้าคงเหลือไม่พอ (คงเหลือ ${selectedProduct.stock} ${
+          selectedProduct.unit || ''
+        })`
       );
       return;
     }
 
     setSubmitting(true);
 
-    // ส่งคำสั่งไปยัง Supabase RPC
-    // ระบบจะตรวจ Stock + หัก Stock + บันทึก sales
-    // ภายในคำสั่งเดียว
+    // ใช้ ID จริงจากตาราง products
+    const productId = String(selectedProduct.id);
+
+    console.log('กำลังขายสินค้า:', {
+      productId,
+      sku: selectedProduct.sku,
+      name: selectedProduct.name,
+      quantity: quantityNumber,
+    });
+
     const { data, error } = await supabase.rpc('create_pos_sale', {
-      p_product_id: selectedProduct.id,
+      p_product_id: productId,
       p_quantity: quantityNumber,
     });
 
-    // ถ้าเกิด Error
     if (error) {
-      setErrorMsg('ขายสินค้าไม่สำเร็จ: ' + error.message);
+      console.error('create_pos_sale error:', error);
+
+      setErrorMsg(
+        'ขายสินค้าไม่สำเร็จ: ' + error.message
+      );
+
       setSubmitting(false);
       return;
     }
 
-    // รองรับกรณี Supabase คืนค่ามาเป็น array
+    // Supabase อาจคืนค่าเป็น object หรือ array
     const sale = Array.isArray(data) ? data[0] : data;
 
-    const finalTotal = sale?.total_price ?? totalPrice;
+    const finalTotal =
+      sale?.total_price !== undefined
+        ? Number(sale.total_price)
+        : totalPrice;
 
-    // แสดงข้อความสำเร็จ
     setSuccessMsg(
       `ขาย ${selectedProduct.name} จำนวน ${quantityNumber} ${
         selectedProduct.unit || ''
-      } สำเร็จ ยอดรวม ${Number(finalTotal).toFixed(2)} บาท`
+      } สำเร็จ ยอดรวม ${finalTotal.toFixed(2)} บาท`
     );
 
-    // ล้างฟอร์ม
     resetForm();
 
     // โหลด Stock ใหม่
@@ -129,7 +137,7 @@ export default function SellPage() {
     <div>
       <h1>ขายสินค้า</h1>
 
-      {/* ข้อความ Error */}
+      {/* Error */}
       {errorMsg && (
         <p
           style={{
@@ -142,7 +150,7 @@ export default function SellPage() {
         </p>
       )}
 
-      {/* ข้อความสำเร็จ */}
+      {/* Success */}
       {successMsg && (
         <p
           style={{
@@ -175,7 +183,11 @@ export default function SellPage() {
             <select
               id="product"
               value={selectedProductId}
-              onChange={(e) => setSelectedProductId(e.target.value)}
+              onChange={(e) => {
+                setSelectedProductId(e.target.value);
+                setErrorMsg('');
+                setSuccessMsg('');
+              }}
               required
               style={{
                 width: '100%',
@@ -187,9 +199,16 @@ export default function SellPage() {
               <option value="">-- เลือกสินค้า --</option>
 
               {products.map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.name} - {Number(product.price).toFixed(2)} บาท
-                  {' '} (คงเหลือ {product.stock} {product.unit || ''})
+                <option
+                  key={product.id}
+                  value={String(product.id)}
+                >
+                  {product.name} -{' '}
+                  {Number(product.price).toFixed(2)} บาท
+                  {' '}(
+                  คงเหลือ {product.stock}{' '}
+                  {product.unit || ''}
+                  )
                 </option>
               ))}
             </select>
@@ -214,7 +233,11 @@ export default function SellPage() {
               min="1"
               max={selectedProduct?.stock || undefined}
               value={quantity}
-              onChange={(e) => setQuantity(e.target.value)}
+              onChange={(e) => {
+                setQuantity(e.target.value);
+                setErrorMsg('');
+                setSuccessMsg('');
+              }}
               placeholder="จำนวนที่ต้องการขาย"
               required
               style={{
@@ -237,7 +260,13 @@ export default function SellPage() {
               }}
             >
               <p>
-                <strong>สินค้า:</strong> {selectedProduct.name}
+                <strong>สินค้า:</strong>{' '}
+                {selectedProduct.name}
+              </p>
+
+              <p>
+                <strong>SKU:</strong>{' '}
+                {selectedProduct.sku || '-'}
               </p>
 
               <p>
@@ -246,8 +275,14 @@ export default function SellPage() {
               </p>
 
               <p>
-                <strong>คงเหลือ:</strong> {selectedProduct.stock}{' '}
+                <strong>คงเหลือ:</strong>{' '}
+                {selectedProduct.stock}{' '}
                 {selectedProduct.unit || ''}
+              </p>
+
+              <p>
+                <strong>ID:</strong>{' '}
+                {selectedProduct.id}
               </p>
             </div>
           )}
@@ -271,11 +306,16 @@ export default function SellPage() {
               padding: '12px 24px',
               borderRadius: '8px',
               border: 'none',
-              cursor: submitting ? 'not-allowed' : 'pointer',
+              cursor:
+                submitting || !selectedProduct
+                  ? 'not-allowed'
+                  : 'pointer',
               fontWeight: 600,
             }}
           >
-            {submitting ? 'กำลังบันทึก...' : 'ขายสินค้า'}
+            {submitting
+              ? 'กำลังบันทึก...'
+              : 'ขายสินค้า'}
           </button>
         </form>
       )}
